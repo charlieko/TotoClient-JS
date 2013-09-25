@@ -323,6 +323,7 @@
       this.batchQueue = {};
       this.socket = null;
       this.socketMessageHandlers = {};
+      this.timeout = 60000;
     };
 
     var localStorageDisabled = false;
@@ -334,7 +335,6 @@
           localStorageDisabled = true;
         }
       }
-      return;
       var match = new RegExp(name + '=(.+?);').exec(document.cookie);
       if(!match) {
         return null;
@@ -352,6 +352,14 @@
         }
       }
       document.cookie = [name, '=', value, ';'].join('');
+    };
+
+    function generateQueryString(object) {
+      var output = [];
+      for (var key in object) {
+        output.push(encodeURIComponent(key) + '=' + encodeURIComponent(object[key]));
+      }
+      return output.join('&');
     };
 
     Toto.prototype.sessionID = function() {
@@ -390,15 +398,16 @@
       return hmac;
     };
 
-    Toto.prototype.request = function(method, args) {
-      return this.rawRequest({
-        "method" : method,
-        "parameters" : args
-      });
+    Toto.prototype.request = function(method, args, useQueryString) {
+      if (useQueryString) {
+        return this.rawRequest(null, 'GET', this.url + '/' + method.replace('.', '/') + '?' + generateQueryString(args));
+      } else {
+        return this.rawRequest({"method" : method, "parameters" : args});
+      }
     };
 
-    Toto.prototype.rawRequest = function(object) {
-      var body = JSON.stringify(object), toto = this, session = this.sessionID(), hmac = session && this.hmac(body), xhr = window.XMLHttpRequest && new XMLHttpRequest(), future = new Future();
+    Toto.prototype.rawRequest = function(object, method, url, file, file_field_name) {
+      var body = JSON.stringify(object), toto = this, session = this.sessionID(), hmac = session && !file && this.hmac(body), xhr = window.XMLHttpRequest && new XMLHttpRequest(), future = new Future();
       if(!xhr) {
         try {
           xhr = new ActiveXObject("Msxml2.XMLHTTP");
@@ -438,14 +447,49 @@
           future.fail(error, this);
         }
       };
-      xhr.open("POST", this.url);
+      xhr.open(method || "POST", url || this.url);
+      xhr.timeout = toto.timeout;
       if(hmac) {
         xhr.setRequestHeader("x-toto-session-id", session);
         xhr.setRequestHeader("x-toto-hmac", hmac);
       }
-      xhr.setRequestHeader("content-type", "application/json");
-      xhr.send(body);
+      if(file){
+        xhr.setRequestHeader("Cache-Control", "no-cache");
+        xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+        xhr.setRequestHeader("X-File-Name", (file.name?file.name:file.fileName));
+        xhr.setRequestHeader("X-File-Size", (file.size?file.size:file.fileSize));
+        if (window.FormData) {
+            var f = new FormData();
+            f.append(file_field_name, file);
+            $.each(object, function(key, val){
+                f.append(key, val);
+            });
+            xhr.send(f);
+        }
+        else {
+            // Not compatible
+            alert("Your browser is not compatible with our upload system. Supported browsers include Firefox 4+, Chrome 7+, and IE 10+");
+        }
+      } else{
+        xhr.setRequestHeader("content-type", "application/json");
+        xhr.send(body);
+      }
+      
+      
       return future;
+    };
+
+    // Uses html5 async upload. It will fail if the browser does not support this feature.
+    Toto.prototype.async_upload = function(url, args){
+      var file = args.file, file_field_name = args.file_field_name;
+      url = this.url + '/' + url.replace('.', '/');
+      if(!file || !file_field_name){
+        throw "Required arguements missing. file and file_field_name are required for async_upload.";
+        return false;
+      }
+      delete args.file;
+      delete args.file_field_name;
+      return this.rawRequest(args, "POST", url, file, file_field_name);
     };
     Toto.prototype.logout = function() {
       document.cookie = 'toto-session-id=;';
@@ -563,3 +607,4 @@
     Toto.Future = Future;
     window.Toto = Toto;
   })();
+
